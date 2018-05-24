@@ -1,0 +1,112 @@
+			+--------------------+
+			|        CS 140      |
+			| PROJECT 1: THREADS |
+			|   DESIGN DOCUMENT  |
+			+--------------------+
+				   
+---- GROUP ----
+
+>> Fill in the names and email addresses of your group members.
+
+Tynchtykbek Kaldybaev <tynchtyk@unist.ac.kr>
+FirstName LastName <email@domain.example>
+FirstName LastName <email@domain.example>
+
+---- PRELIMINARIES ----
+
+>> If you have any preliminary comments on your submission, notes for the
+>> TAs, or extra credit, please give them here.
+
+>> Please cite any offline or online sources you consulted while
+>> preparing your submission, other than the Pintos documentation, course
+>> text, lecture notes, and course staff.
+https://www.cs.cmu.edu/~gilpin/tutorial/
+https://sites.google.com/a/cs.usfca.edu/cs-326-01-2011-fall/assignments/labs/lab-7-10-26
+
+
+			     ALARM CLOCK
+			     ===========
+
+---- DATA STRUCTURES ----
+
+>> A1: Copy here the declaration of each new or changed `struct' or
+>> `struct' member, global or static variable, `typedef', or
+>> enumeration.  Identify the purpose of each in 25 words or less.
+
+// in order to save the time for wake up of sleeping thread
+//thread struct member
+int64_t wake_time
+
+//static struct list, in order to store the list of sleeping threads.
+static struct list sleeping_list
+
+// thread function, it will be called by timer_sleep
+void thread_sleep(int64_t) 
+
+// thread function, it will be called by timer_interrupt
+void thread_wake(int64_t)  
+
+
+---- ALGORITHMS ----
+
+>> A2: Briefly describe what happens in a call to timer_sleep(),
+>> including the effects of the timer interrupt handler.
+When timer_sleep is called, it will call thread function "thread_sleep" giving wake time (timer_ticks() + ticks) as an argument.
+Then in the thread_sleep function, first it will put this thread into sleeping_list, and will block this thread.
+When timer_interrupt is called, it will call thread function "thread_wake" giving the current time as an argument.
+Then in the thread_wake function, it will look through sleeping_list and remove the threads whose wake_time is less than current time, then it will unclock those threads.
+
+
+>> A3: What steps are taken to minimize the amount of time spent in
+>> the timer interrupt handler?
+Timer interrupt will call thread_wake function, which works for O(n) by looking the all elements in sleeping_list. 
+Optimizations could be applied for this algorithm, but the difference would not much better. So we left it at this point.
+
+
+---- RATIONALE ----
+
+>> A6: Why did you choose this design?  In what ways is it superior to
+>> another design you considered?
+First I tried to write code in the timer_sleep and in the timer_interrupt function, dont calling the thread functions. 
+But there was page faults when we tried to put the elemenst in sleeping_list, so I designed these functions in thread.c/thread.h file.
+ 
+
+
+
+			 PRIORITY SCHEDULING
+			 ===================
+
+---- DATA STRUCTURES ----
+
+>> B1: Copy here the declaration of each new or changed `struct' or
+>> `struct' member, global or static variable, `typedef', or
+>> enumeration.  Identify the purpose of each in 25 words or less.
+
+---- RATIONALE ----
+
+>> B7: Why did you choose this design?  In what ways is it superior to
+>> another design you considered?
+
+			   SURVEY QUESTIONS
+			   ================
+
+Answering these questions is optional, but it will help us improve the
+course in future quarters.  Feel free to tell us anything you
+want--these questions are just to spur your thoughts.  You may also
+choose to respond anonymously in the course evaluations at the end of
+the quarter.
+
+>> In your opinion, was this assignment, or any one of the three problems
+>> in it, too easy or too hard?  Did it take too long or too little time?
+
+>> Did you find that working on a particular part of the assignment gave
+>> you greater insight into some aspect of OS design?
+
+>> Is there some particular fact or hint we should give students in
+>> future quarters to help them solve the problems?  Conversely, did you
+>> find any of our guidance to be misleading?
+
+>> Do you have any suggestions for the TAs to more effectively assist
+>> students, either for future quarters or the remaining projects?
+
+>> Any other comments?

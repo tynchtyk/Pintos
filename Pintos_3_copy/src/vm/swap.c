@@ -1,89 +1,67 @@
 #include "vm/swap.h"
-#include <bitmap.h>
-#include <debug.h>
-#include <stdio.h>
-#include "vm/frame.h"
-#include "vm/page.h"
-#include "threads/synch.h"
 #include "threads/vaddr.h"
+#include "debug.h"
+#include "stdint.h"
+#include "stdbool.h"
 
-/* The swap device. */
-static struct block *swap_device;
-
-/* Used swap pages. */
-static struct bitmap *swap_bitmap;
-
-/* Protects swap_bitmap. */
-static struct lock swap_lock;
-
-/* Number of sectors per page. */
-#define PAGE_SECTORS (PGSIZE / BLOCK_SECTOR_SIZE)
-
-/* Sets up swap. */
-void
-swap_init (void)
-{
-  swap_device = block_get_role (BLOCK_SWAP);
-  if (swap_device == NULL)
-    {
-      printf ("no swap device--swap disabled\n");
-      swap_bitmap = bitmap_create (0);
+void vm_swap_init() {
+    // Initialize the lock, mutex
+    lock_init(&vm_swap_lock);
+    
+    // Initialize the swap slots
+    vm_swap_block = block_get_role(BLOCK_SWAP);
+    if(vm_swap_block == NULL) {
+        PANIC("Swap block is not found or not initialized!");
     }
-  else
-    swap_bitmap = bitmap_create (block_size (swap_device)
-                                 / PAGE_SECTORS);
-  if (swap_bitmap == NULL)
-    PANIC ("couldn't create swap bitmap");
-  lock_init (&swap_lock);
+
+    // Initialize the bitmap
+    vm_swap_bm = bitmap_create(block_size(vm_swap_block) / slots_in_page());
+    if(vm_swap_bm == NULL) {
+        PANIC("Bitmap for swap slots have failed to be allocated!");
+    }
 }
 
-/* Swaps in page P, which must have a locked frame
-   (and be swapped out). */
-void
-swap_in (struct page *p)
-{
-  size_t i;
-
-  ASSERT (p->frame != NULL);
-  ASSERT (lock_held_by_current_thread (&p->frame->lock));
-  ASSERT (p->sector != (block_sector_t) -1);
-
-  for (i = 0; i < PAGE_SECTORS; i++)
-    block_read (swap_device, p->sector + i,
-                p->frame->base + i * BLOCK_SECTOR_SIZE);
-  bitmap_reset (swap_bitmap, p->sector / PAGE_SECTORS);
-  p->sector = (block_sector_t) -1;
+void vm_swap_destroy() {
+    ASSERT(vm_swap_block && vm_swap_bm);
+    bitmap_destroy(vm_swap_bm);
+    // TODO destroy swap..
 }
 
-/* Swaps out page P, which must have a locked frame. */
-bool
-swap_out (struct page *p)
-{
-  size_t slot;
-  size_t i;
+unsigned int vm_swap_in(void* frame) {
+    ASSERT(vm_swap_block && vm_swap_bm);
+    lock_acquire(&vm_swap_lock);
+    frame = pg_round_down(frame); // TODO is this correct ?
+    unsigned int index = bitmap_scan_and_flip(vm_swap_bm, 0, 1, 0);
+    if(index == BITMAP_ERROR) {
+        PANIC("No free swap slot left!");
+    }
+    int i;
+    for(i = 0; i < slots_in_page(); i++) {
+        char* frame_ch = (char *) frame;
+        block_write(vm_swap_block, i + index * slots_in_page(), frame_ch + i * BLOCK_SECTOR_SIZE);
+    }
+    lock_release(&vm_swap_lock);
+    return index;
+}
 
-  ASSERT (p->frame != NULL);
-  ASSERT (lock_held_by_current_thread (&p->frame->lock));
+void vm_swap_out(void* frame, unsigned int index) {
+   ASSERT(vm_swap_block && vm_swap_bm);
+   lock_acquire(&vm_swap_lock);
+   frame = pg_round_down(frame); // TODO is this correct ?
+   bool is_located = bitmap_test(vm_swap_bm, index);
+   if(is_located == false) {
+        PANIC("The specified index is not located in the swap slot!");
+   } 
+   bitmap_reset(vm_swap_bm, index);
+   int i;
+   for(i = 0; i < slots_in_page(); i++) {
+        char* frame_ch = (char *) frame;
+        block_read(vm_swap_block, i + index * slots_in_page(), frame_ch + i * BLOCK_SECTOR_SIZE);
+   }
+   lock_release(&vm_swap_lock);
+}
 
-  lock_acquire (&swap_lock);
-  slot = bitmap_scan_and_flip (swap_bitmap, 0, 1, false);
-  lock_release (&swap_lock);
-  if (slot == BITMAP_ERROR)
-    return false;
-
-  p->sector = slot * PAGE_SECTORS;
-
-  /*  Write out page sectors for each modified block. */
-  for (i = 0; i < PAGE_SECTORS; i++)
-  {
-    block_write (swap_device, p->sector + i,
-                 (uint8_t *) p->frame->base + i * BLOCK_SECTOR_SIZE);
-  }
-
-  p->private = false;
-  p->file = NULL;
-  p->file_offset = 0;
-  p->file_bytes = 0;
-
-  return true;
+// TODO: now 1024 bytes in a page, and 512 in block's slot, so 2 slots in page
+int slots_in_page() {
+    return PGSIZE / BLOCK_SECTOR_SIZE;
 }

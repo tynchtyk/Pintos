@@ -23,6 +23,8 @@ main (int argc, const char *argv[])
   size_t i;
 
   quiet = true;
+
+  // printf("ok1\n");
   
   CHECK (argc == 2, "argc must be 2, actually %d", argc);
   child_idx = atoi (argv[1]);
@@ -31,11 +33,16 @@ main (int argc, const char *argv[])
   random_bytes (buf, sizeof buf);
 
   CHECK ((fd = open (file_name)) > 1, "open \"%s\"", file_name);
+
+  // printf("ok2 %d\n", child_idx);
+
   for (i = 0; i < sizeof buf; i++) 
     {
+      // printf("ok3 %d\n", child_idx);
       char c;
       CHECK (read (fd, &c, 1) > 0, "read \"%s\"", file_name);
       compare_bytes (&c, buf + i, 1, i, file_name);
+      // printf("ok4 %d\n", child_idx);
     }
   close (fd);
 

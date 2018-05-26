@@ -1,50 +1,39 @@
 #ifndef VM_PAGE_H
 #define VM_PAGE_H
 
-#include <hash.h>
-#include "devices/block.h"
-#include "filesys/off_t.h"
-#include "threads/synch.h"
+#include <stdbool.h>
+#include <stdint.h>
+#include "lib/kernel/hash.h"
+#include "filesys/file.h"
+#include <debug.h>
+#include <stddef.h>
+#include <random.h>
+#include <stdio.h>
+#include <string.h>
 
-/* Virtual page. */
-struct page 
-  {
-    /* Immutable members. */
-    void *addr;                 /* User virtual address. */
-    bool read_only;             /* Read-only page? */
-    struct thread *thread;      /* Owning thread. */
-
-    /* Accessed only in owning process context. */
-    struct hash_elem hash_elem; /* struct thread `pages' hash element. */
-
-    /* Set only in owning process context with frame->frame_lock held.
-       Cleared only with scan_lock and frame->frame_lock held. */
-    struct frame *frame;        /* Page frame. */
-
-    /* Swap information, protected by frame->frame_lock. */
-    block_sector_t sector;       /* Starting sector of swap area, or -1. */
+struct vm_spt_e { // virtual memory supplementary page table entry
+    void* vaddr; // virtual address
+    bool writable;
     
-    /* Memory-mapped file information, protected by frame->frame_lock. */
-    bool private;               /* False to write back to file,
-                                   true to write back to swap. */
-    struct file *file;          /* File. */
-    off_t file_offset;          /* Offset in file. */
-    off_t file_bytes;           /* Bytes to read/write, 1...PGSIZE. */
-  };
+    struct hash_elem elem;
+    
+    // for files
+    struct file* file;
+    bool is_file;
+    off_t ofs;
+    uint32_t read_bytes;
+    uint32_t zero_bytes;
+    
+    bool is_swap;
+    bool is_page;
+};
 
-void page_exit (void);
+void vm_spt_init(struct hash* spt);
+void vm_spt_destroy(struct hash* spt);
+void vm_spt_add_file_entry(struct hash* spt, struct file *file, off_t ofs, uint8_t *upage,
+                           uint32_t read_bytes, uint32_t zero_bytes, bool writable);
 
-struct page *page_allocate (void *, bool read_only);
-void page_deallocate (void *vaddr);
+struct vm_spt_e* vm_spt_find_e(struct hash* spt, void* addr);
 
-bool page_in (void *fault_addr);
-bool page_out (struct page *);
-bool page_accessed_recently (struct page *);
 
-bool page_lock (const void *, bool will_write);
-void page_unlock (const void *);
-
-hash_hash_func page_hash;
-hash_less_func page_less;
-
-#endif /* vm/page.h */
+#endif

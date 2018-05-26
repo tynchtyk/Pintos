@@ -13,13 +13,23 @@
 #include "threads/vaddr.h"
 #ifdef USERPROG
 #include "userprog/process.h"
-#include "userprog/syscall.h"
+#include <userprog/syscall.h>
+#include "vm/frame.h"
+#include "vm/page.h"
 #endif
+// SOme comments
 
 /* Random value for struct thread's `magic' member.
    Used to detect stack overflow.  See the big comment at the top
    of thread.h for details. */
 #define THREAD_MAGIC 0xcd6abf4b
+
+/* MY_CHANGES_BEGIN */
+static struct list timer_sleep_list;
+struct list* get_timer_sleep_list(void) {
+    return &timer_sleep_list;
+}
+/* MY_CHANGES_END */
 
 /* List of processes in THREAD_READY state, that is, processes
    that are ready to run but not actually running. */
@@ -65,8 +75,7 @@ static void kernel_thread (thread_func *, void *aux);
 static void idle (void *aux UNUSED);
 static struct thread *running_thread (void);
 static struct thread *next_thread_to_run (void);
-static void init_thread (struct thread *, const char *name, int priority,
-                         tid_t);
+static void init_thread (struct thread *, const char *name, int priority);
 static bool is_thread (struct thread *) UNUSED;
 static void *alloc_frame (struct thread *, size_t size);
 static void schedule (void);
@@ -91,14 +100,22 @@ thread_init (void)
 {
   ASSERT (intr_get_level () == INTR_OFF);
 
+// CHANGES
+list_init(&timer_sleep_list);
+
   lock_init (&tid_lock);
   list_init (&ready_list);
   list_init (&all_list);
 
+  vm_frame_init();
+
   /* Set up a thread structure for the running thread. */
   initial_thread = running_thread ();
-  init_thread (initial_thread, "main", PRI_DEFAULT, 0);
+  init_thread (initial_thread, "main", PRI_DEFAULT);
   initial_thread->status = THREAD_RUNNING;
+  initial_thread->tid = allocate_tid ();
+  
+  
 }
 
 /* Starts preemptive thread scheduling by enabling interrupts.
@@ -109,10 +126,17 @@ thread_start (void)
   /* Create the idle thread. */
   struct semaphore idle_started;
   sema_init (&idle_started, 0);
+  
+  // printf("<2>PINTOS WORKS\n");
+
   thread_create ("idle", PRI_MIN, idle, &idle_started);
+
+  
 
   /* Start preemptive thread scheduling. */
   intr_enable ();
+    
+    // printf("<9>PINTOS WORKS\n");
 
   /* Wait for the idle thread to initialize idle_thread. */
   sema_down (&idle_started);
@@ -181,11 +205,23 @@ thread_create (const char *name, int priority,
   if (t == NULL)
     return TID_ERROR;
 
-  /* Initialize thread. */
-  init_thread (t, name, priority, allocate_tid ());
-  tid = t->tid;
+    /* Initialize thread. */
+  init_thread (t, name, priority);
+  tid = t->tid = allocate_tid ();
 
-  /* Prepare thread for first run by initializing its stack.
+// VM
+  vm_spt_init(&t->spt);
+  
+  // CHANGES TODO CHECK 
+  t->is_parent_waits = false;
+  t->parent_t = NULL;
+  t->exit_status = 0;
+  t->had_children = false;
+  list_init(&t->fdp_list); // is this correct TODO
+  list_init(&t->child_plist);
+  list_init(&t->waited_children);
+
+    /* Prepare thread for first run by initializing its stack.
      Do this atomically so intermediate values for the 'stack' 
      member cannot be observed. */
   old_level = intr_disable ();
@@ -207,6 +243,8 @@ thread_create (const char *name, int priority,
 
   intr_set_level (old_level);
 
+  //printf("<4>PINTOS WORKS\n");
+
   /* Add to run queue. */
   thread_unblock (t);
 
@@ -222,13 +260,14 @@ thread_create (const char *name, int priority,
 void
 thread_block (void) 
 {
+
   ASSERT (!intr_context ());
   ASSERT (intr_get_level () == INTR_OFF);
 
   thread_current ()->status = THREAD_BLOCKED;
   schedule ();
 }
-
+ // !!! possible source of buge
 /* Transitions a blocked thread T to the ready-to-run state.
    This is an error if T is not blocked.  (Use thread_yield() to
    make the running thread ready.)
@@ -246,10 +285,83 @@ thread_unblock (struct thread *t)
 
   old_level = intr_disable ();
   ASSERT (t->status == THREAD_BLOCKED);
-  list_push_back (&ready_list, &t->elem);
   t->status = THREAD_READY;
-  intr_set_level (old_level);
+
+  // printf("<4>PINTOS WORKS\n");
+
+struct thread *cur = thread_current();
+
+// printf("<5>PINTOS WORKS\n");
+
+
+// CHANGE: list_push_back -> ready_list_push
+//if(idle_thread != &t->elem) { // CHANGE
+ ready_list_push (&ready_list, &t->elem);
+//}
+// ready_list_push(&ready_list, &(thread_current()->elem)); // !!! ADDED LINE
+  // (thread_current())->status = THREAD_READY; // !!! ADDED LINE
+//	schedule();	// !!! ADDED LINE  
+// thread_block(thread_current());
+
+// thread_change_threads();
+intr_set_level (old_level);
+	// thread_yield(); // !!! ADDED LINE
+// thread_change_threads();
+
+// printf("<6>PINTOS WORKS\n");
+
+if(cur != idle_thread && list_empty(&ready_list) == false && t->priority > cur->priority) {
+thread_yield();
 }
+
+// printf("<7>PINTOS WORKS\n");
+// struct thread *cur2 = thread_current();
+// printf("<8>CURRENT_THREAD: %s, priority: %d, stat: %d\n", cur2->name, cur2->priority, cur2->status);
+}
+
+/* MY_CHANGES_BEGIN */
+bool less(const struct list_elem *a, const struct list_elem *b, void *aux) {
+	struct thread *aa = list_entry(a, struct thread, elem);
+	struct thread *bb = list_entry(b, struct thread, elem);
+
+	if(aa->priority > bb->priority) return true;
+	else return false; 		
+}
+
+struct thread* get_thread_by_tid(tid_t tid) {
+
+enum intr_level old_lev;
+old_lev = intr_disable();
+
+    struct list_elem *e;
+
+ // DO we need interruptions off here? TODO
+
+  for (e = list_begin (&all_list); e != list_end (&all_list);
+       e = list_next (e))
+    {
+      struct thread *t = list_entry (e, struct thread, allelem);
+      if(t->tid == tid) return t;
+    }
+    intr_set_level(old_lev);
+  return NULL;
+}
+
+bool is_child_process_of(struct thread* child, struct thread* cur) {
+    if(child->parent_t == cur) return true;
+    return false;
+}
+
+bool process_waits_for(struct thread* cur, struct thread* child) {
+    if(is_child_process_of(child, cur) && child->is_parent_waits == true) return true;
+    return false;
+}
+
+void ready_list_push(struct list *list, struct list_elem *elem) {
+//	list_remove(elem);
+	list_insert_ordered(list, elem, less, NULL); // !!! possible source of bugs
+}
+/* MY_CHANGES_END */
 
 /* Returns the name of the running thread. */
 const char *
@@ -291,37 +403,117 @@ thread_exit (void)
 {
   ASSERT (!intr_context ());
 
-  syscall_exit ();
+ lock_acquire(get_filesys_lock()); // change 
+struct file * fil = filesys_open(thread_current()->name);
+// if(fil != NULL) file_allow_write(fil);
+lock_release(get_filesys_lock()); // change
+
 #ifdef USERPROG
-  process_exit ();
+ process_exit ();
 #endif
 
   /* Remove thread from all threads list, set our status to dying,
      and schedule another process.  That process will destroy us
      when it calls thread_schedule_tail(). */
   intr_disable ();
+  //lock_acquire(get_filesys_lock());
+ // process_close_fds(0);
+  //lock_release(get_filesys_lock());
+
+  /*struct list_elem *e;
+
+  for (e = list_begin (&open_desc_list); e != list_end (&open_desc_list);
+       e = list_next (e))
+    {
+      struct thread *t = list_entry (e, struct thread, open_desc_elem);
+    }
+*/
   list_remove (&thread_current()->allelem);
-  thread_current ()->status = THREAD_DYING;
+
+  // TODO do we need to add removal from all other thread lists??
+  struct thread *cur = thread_current();
+
+
+  // TODO CHANGE is_parent waits added
+  if(cur->parent_t != NULL && cur->parent_t->status == THREAD_BLOCKED && cur->is_parent_waits) thread_unblock(cur->parent_t); // TODO maybe unsafe bcz parent thread may deadlock if this called when parent is executing
+
+/*  if(cur->parent_t != NULL) {
+  struct list * child_plist = &thread_current()->child_plist;
+  struct list_elem *e; 
+  for(e = list_begin(child_plist); e != list_end(child_plist); e = list_next(e)) {
+        struct pchild * pch = list_entry(e, struct pchild, pchild_elem);
+        free(pch);
+   }   
+  }
+*/
+  cur->status = THREAD_DYING;
+  //sema_up(&cur->par_wait_sema);
   schedule ();
   NOT_REACHED ();
 }
+
+/*DEBUG_BEGIN*/
+//static int iter = 0;
+/*DEBUG_END*/
+
 
 /* Yields the CPU.  The current thread is not put to sleep and
    may be scheduled again immediately at the scheduler's whim. */
 void
 thread_yield (void) 
 {
+
+//printf("<11>THREAD_YIELDS WORKS\n");
+	/*DEBUG_BEGIN*/
+/*	++iter;
+	printf("ITER: <%d> begin\n", iter);
+	struct list_elem *e;
+	for(e = list_begin(&ready_list); e != list_end(&ready_list); e = list_next(e)) {
+		struct thread *t = list_entry(e, struct thread, elem);
+		printf("ITER: <%d>, name: %s, priority: %d, stat: %d\n", iter, t->name, t->priority, t->status);
+	}
+	printf("ITER: <%d> end\n", iter); */
+	/*DEBUG_END*/
+
   struct thread *cur = thread_current ();
+
+// DEBUG BEGIN
+// printf("ITER: <%d> name: %s, stat: %d\n\n---\n", iter, cur->name, cur->status);
+
   enum intr_level old_level;
   
   ASSERT (!intr_context ());
 
   old_level = intr_disable ();
-  if (cur != idle_thread) 
-    list_push_back (&ready_list, &cur->elem);
+  // CHANGE: list_push_back -> ready_list_push
+  if (cur != idle_thread) { 
+    ready_list_push (&ready_list, &cur->elem);
+  }  
   cur->status = THREAD_READY;
   schedule ();
   intr_set_level (old_level);
+}
+
+// CHANGES
+/* Must be called from interruption disabled context 
+* Puts the current thread in the ready_list and marks it as READY
+* Block the current thread, which in turn schedules new thread 
+*/
+void thread_change_threads(void) {
+  
+  ASSERT (!intr_context ());
+  ASSERT (intr_get_level () == INTR_OFF);
+
+  struct thread* cur = thread_current();
+
+  if (cur != idle_thread) { 
+    ready_list_push (&ready_list, &cur->elem);
+  }  
+
+  // struct thread *cur = running_thread ();
+  cur->status = THREAD_READY; // possible source of bugs, may become THREAD_BLOCKED
+  thread_block(); // not a good choice one, it will not be unblocked :(
+
 }
 
 /* Invoke function 'func' on all threads, passing along 'aux'.
@@ -345,7 +537,23 @@ thread_foreach (thread_action_func *func, void *aux)
 void
 thread_set_priority (int new_priority) 
 {
-  thread_current ()->priority = new_priority;
+// CHANGES
+//enum intr_level old_level;
+  
+  //old_level = intr_disable ();
+
+	thread_current ()->priority = new_priority;
+	/* MY_CHANGES_BEGIN */
+  	// struct thread* t = thread_current();
+	// list_remove(&t->elem); // !!! possible source of bugs
+	// list_pop_front(&ready_list); // !!! possible source of bugs 
+	// t->priority = new_priority;
+	
+	thread_yield();
+	// thread_change_threads();
+
+  //intr_set_level (old_level);
+	/* MY_CHANGES_END */
 }
 
 /* Returns the current thread's priority. */
@@ -398,6 +606,8 @@ thread_get_recent_cpu (void)
 static void
 idle (void *idle_started_ UNUSED) 
 {
+
+ // printf("<12>PINTOS WORKS current:%s\n", thread_current()->name);
   struct semaphore *idle_started = idle_started_;
   idle_thread = thread_current ();
   sema_up (idle_started);
@@ -459,28 +669,17 @@ is_thread (struct thread *t)
 /* Does basic initialization of T as a blocked thread named
    NAME. */
 static void
-init_thread (struct thread *t, const char *name, int priority, tid_t tid)
+init_thread (struct thread *t, const char *name, int priority)
 {
   ASSERT (t != NULL);
   ASSERT (PRI_MIN <= priority && priority <= PRI_MAX);
   ASSERT (name != NULL);
 
   memset (t, 0, sizeof *t);
-  t->tid = tid;
   t->status = THREAD_BLOCKED;
   strlcpy (t->name, name, sizeof t->name);
   t->stack = (uint8_t *) t + PGSIZE;
   t->priority = priority;
-  t->exit_code = -1;
-  t->wait_status = NULL;
-  list_init (&t->children);
-  sema_init (&t->timer_sema, 0);
-  t->pagedir = NULL;
-  t->pages = NULL;
-  t->bin_file = NULL;
-  list_init (&t->fds);
-  list_init (&t->mappings);
-  t->next_handle = 2;
   t->magic = THREAD_MAGIC;
   list_push_back (&all_list, &t->allelem);
 }
@@ -565,10 +764,11 @@ thread_schedule_tail (struct thread *prev)
 
    It's not safe to call printf() until thread_schedule_tail()
    has completed. */
+
 static void
 schedule (void) 
 {
-  struct thread *cur = running_thread ();
+	  struct thread *cur = running_thread ();
   struct thread *next = next_thread_to_run ();
   struct thread *prev = NULL;
 

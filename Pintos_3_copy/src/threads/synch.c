@@ -64,7 +64,7 @@ sema_down (struct semaphore *sema)
 
   ASSERT (sema != NULL);
   ASSERT (!intr_context ());
-
+ 
   old_level = intr_disable ();
   while (sema->value == 0) 
     {
@@ -118,6 +118,8 @@ sema_up (struct semaphore *sema)
                                 struct thread, elem));
   sema->value++;
   intr_set_level (old_level);
+// CHANGES
+//  thread_yield();
 }
 
 static void sema_test_helper (void *sema_);

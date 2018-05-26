@@ -1,11 +1,17 @@
 #ifndef VM_SWAP_H
-#define VM_SWAP_H 1
+#define VM_SWAP_H
 
-#include <stdbool.h>
+#include "threads/synch.h"
+#include "devices/block.h"
+#include "lib/kernel/bitmap.h"
 
-struct page;
-void swap_init (void);
-void swap_in (struct page *);
-bool swap_out (struct page *);
+struct bitmap* vm_swap_bm;
+struct block* vm_swap_block;
+struct lock vm_swap_lock;
 
-#endif /* vm/swap.h */
+void vm_swap_init(void);
+void vm_swap_destroy(void);
+unsigned int vm_swap_in(void* frame); // put the given frame to the block
+void vm_swap_out(void* frame, unsigned int index); // swap from the swap slot to the frame
+
+#endif

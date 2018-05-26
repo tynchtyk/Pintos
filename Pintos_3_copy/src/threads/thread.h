@@ -2,10 +2,11 @@
 #define THREADS_THREAD_H
 
 #include <debug.h>
-#include <hash.h>
 #include <list.h>
 #include <stdint.h>
-#include "threads/synch.h"
+
+#include <threads/synch.h>
+#include <lib/kernel/hash.h>
 
 /* States in a thread's life cycle. */
 enum thread_status
@@ -92,47 +93,45 @@ struct thread
     int priority;                       /* Priority. */
     struct list_elem allelem;           /* List element for all threads list. */
 
-    /* Owned by process.c. */
-    int exit_code;                      /* Exit code. */
-    struct wait_status *wait_status;    /* This process's completion status. */
-    struct list children;               /* Completion status of children. */
-
     /* Shared between thread.c and synch.c. */
     struct list_elem elem;              /* List element. */
+    
+    /* MY_CHANGES_BEGIN */
+    int ticks_end;
+    struct list_elem timer_sleep_elem;
+    /* MY_CHANGES_EBD */
 
-    /* Alarm clock. */
-    int64_t wakeup_time;                /* Time to wake this thread up. */
-    struct list_elem timer_elem;        /* Element in timer_wait_list. */
-    struct semaphore timer_sema;        /* Semaphore. */
-
+#ifdef USERPROG
     /* Owned by userprog/process.c. */
     uint32_t *pagedir;                  /* Page directory. */
-    struct hash *pages;                 /* Page table. */
-    struct file *bin_file;              /* The binary executable. */
+    /* Parent of this process i.e caller */
+    struct thread *parent_t;
+    /* Flag if this process is being waited by parent process */
+    bool is_parent_waits;
 
-    /* Owned by syscall.c. */
-    struct list fds;                    /* List of file descriptors. */
-    struct list mappings;               /* Memory-mapped files. */
-    int next_handle;                    /* Next handle value. */
-    void *user_esp;                     /* User's stack pointer. */
+    bool loaded_exec;
+    /* Semaphore for waiting */
+    // struct semaphore par_wait_sema;
+    /* Exit status */
+    int exit_status;
+    /* Open descriptors */
+    // struct list_elem open_desc_elem;
+    /* Children of this process */
+    // struct list_elem child_thread_elem;
+    struct list fdp_list;
+
+    struct list child_plist;
+    struct list waited_children;
+
+    bool had_children;
+
+    // VM
+    struct hash spt; // supplementary hash table
+
+#endif
 
     /* Owned by thread.c. */
     unsigned magic;                     /* Detects stack overflow. */
-  };
-
-/* Tracks the completion of a process.
-   Reference held by both the parent, in its `children' list,
-   and by the child, in its `wait_status' pointer. */
-struct wait_status
-  {
-    struct list_elem elem;              /* `children' list element. */
-    struct lock lock;                   /* Protects ref_cnt. */
-    int ref_cnt;                        /* 2=child and parent both alive,
-                                           1=either child or parent alive,
-                                           0=child and parent both dead. */
-    tid_t tid;                          /* Child thread id. */
-    int exit_code;                      /* Child exit code, if dead. */
-    struct semaphore dead;              /* 1=child alive, 0=child dead. */
   };
 
 /* If false (default), use round-robin scheduler.
@@ -170,5 +169,17 @@ int thread_get_nice (void);
 void thread_set_nice (int);
 int thread_get_recent_cpu (void);
 int thread_get_load_avg (void);
+
+/* MY_CHANGES_BEGIN */
+bool less(const struct list_elem *, const struct list_elem *, void *);
+void ready_list_push(struct list *, struct list_elem *);
+void thread_change_threads(void);
+struct list* get_timer_sleep_list(void);
+/* MY_CHANGES_END */
+
+// CHANGES
+struct thread *get_thread_by_tid(tid_t);
+bool is_child_process_of(struct thread*, struct thread*);
+bool process_waits_for(struct thread*, struct thread*);
 
 #endif /* threads/thread.h */

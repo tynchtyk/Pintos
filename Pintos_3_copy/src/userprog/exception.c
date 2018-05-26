@@ -4,6 +4,9 @@
 #include "userprog/gdt.h"
 #include "threads/interrupt.h"
 #include "threads/thread.h"
+
+#include "userprog/process.h"
+#include "threads/vaddr.h"
 #include "vm/page.h"
 
 /* Number of page faults processed. */
@@ -149,19 +152,60 @@ page_fault (struct intr_frame *f)
   write = (f->error_code & PF_W) != 0;
   user = (f->error_code & PF_U) != 0;
 
-  /* Allow the pager to try to handle it. */
-  if (user && not_present)
-    {
-      if (!page_in (fault_addr))
-        thread_exit ();
-      return;
-    }
+  if(fault_addr == NULL) {
+    //printf("NULL!\n");
+    exit_process(thread_current()->name, -1);
+    return;
+  }
+
+  if(!not_present) {
+    standard_pf(fault_addr, not_present, write, user, f);
+  }
+
+  //printf("fault_addr : %d\n", pg_round_down(fault_addr));
+
+  struct thread* cur = thread_current();
+  struct vm_spt_e* e = vm_spt_find_e(&cur->spt, fault_addr);
+  if(e == NULL) {
+    //printf("WTF?! Where is the entry in vm_spt_e ??? -> %s\n", cur->name);
+    standard_pf(fault_addr, not_present, write, user, f);
+  }
+  else {
+    //printf("WUHHU! :) -> %s\n", cur->name);
+  }
+
+  if (! load_file (e->file, e->ofs, (void *) e->vaddr,
+                     e->read_bytes, e->zero_bytes, e->writable)) {
+    //printf("WTF?! YOU SHOULD PF_LOAD!!! -> %s\n", cur->name);
+    standard_pf(fault_addr, not_present, write, user, f);
+  } else {
+    //printf("YEAAAH! :) -> %s\n", cur->name);
+    // asm volatile ("movl %0, %%esp; jmp intr_exit" : : "g" (f) : "memory");
+    return;
+  }
+
+  /* To implement virtual memory, delete the rest of the function
+     body, and replace it with code that brings in the page to
+     which fault_addr refers. */
+   /* if(user) { // CHANGE
+    exit_process(thread_current()->name, -1);
+    return;
+   } // TODO
 
   printf ("Page fault at %p: %s error %s page in %s context.\n",
           fault_addr,
           not_present ? "not present" : "rights violation",
           write ? "writing" : "reading",
           user ? "user" : "kernel");
-  kill (f);
+  kill (f); */
+}
+
+void standard_pf(void* fault_addr, bool not_present, bool write, bool user, struct intr_frame* f) {
+  printf ("Page fault at %p: %s error %s page in %s context.\n",
+          fault_addr,
+          not_present ? "not present" : "rights violation",
+          write ? "writing" : "reading",
+          user ? "user" : "kernel");
+  kill (f); 
 }
 

@@ -845,6 +845,20 @@ pf_load_segment (struct file *file, off_t ofs, uint8_t *upage,
   return success;
 }
 
+bool stack_grow(void *va) {
+    ASSERT(va != NULL);
+    uint8_t *kpage;
+    bool success = false;
+       
+    kpage = vm_frame_alloc(PAL_USER | PAL_ZERO);
+    if(kpage != NULL) {
+        success = install_page(pg_round_down(va), kpage, true);
+    }
+    if(! success) vm_frame_free(kpage);
+
+    return success;
+}
+
 /* Create a minimal stack by mapping a zeroed page at the top of
    user virtual memory. */
 static bool

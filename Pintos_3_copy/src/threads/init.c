@@ -22,6 +22,7 @@
 #include "threads/palloc.h"
 #include "threads/pte.h"
 #include "threads/thread.h"
+#include "vm/swap.h"
 #ifdef USERPROG
 #include "userprog/process.h"
 #include "userprog/exception.h"
@@ -115,12 +116,8 @@ main (void)
   syscall_init ();
 #endif
 
-// DEBUG
-// printf("<1>PINTOS WORKS\n");
-
   /* Start thread scheduler and enable interrupts. */
   thread_start ();
-
   serial_init_queue ();
   timer_calibrate ();
 
@@ -399,6 +396,7 @@ locate_block_devices (void)
   locate_block_device (BLOCK_SCRATCH, scratch_bdev_name);
 #ifdef VM
   locate_block_device (BLOCK_SWAP, swap_bdev_name);
+  swap_init();
 #endif
 }
 

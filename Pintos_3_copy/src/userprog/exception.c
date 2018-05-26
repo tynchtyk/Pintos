@@ -2,11 +2,11 @@
 #include <inttypes.h>
 #include <stdio.h>
 #include "userprog/gdt.h"
+#include <user/syscall.h>
 #include "threads/interrupt.h"
 #include "threads/thread.h"
-
-#include "userprog/process.h"
 #include "threads/vaddr.h"
+#include "userprog/syscall.h"
 #include "vm/page.h"
 
 /* Number of page faults processed. */
@@ -93,7 +93,7 @@ kill (struct intr_frame *f)
       printf ("%s: dying due to interrupt %#04x (%s).\n",
               thread_name (), f->vec_no, intr_name (f->vec_no));
       intr_dump_frame (f);
-      thread_exit (); 
+      exit(-1);
 
     case SEL_KCSEG:
       /* Kernel's code segment, which indicates a kernel bug.
@@ -152,54 +152,29 @@ page_fault (struct intr_frame *f)
   write = (f->error_code & PF_W) != 0;
   user = (f->error_code & PF_U) != 0;
 
-  if(fault_addr == NULL) {
-    exit_process(thread_current()->name, -1);
-    return;
-  }
-
-  if(!not_present) {
-    standard_pf(fault_addr, not_present, write, user, f);
-  }
-
-  //printf("fault_addr : %d\n", pg_round_down(fault_addr));
-
-  if(fault_addr < ((void *)0x08048000) || ! is_user_vaddr(fault_addr)) {
-    standard_pf(fault_addr, not_present, write, user, f);  
-  }
-
-  struct thread* cur = thread_current();
-  struct vm_spt_e* e = vm_spt_find_e(&cur->spt, fault_addr);
-  if(e == NULL) { // If e is NULL, that means we are faulting not the code segment address, but something else
-     // Maybe we are faulting inexistent stack pointer 
-     if(fault_addr >= f->esp) {
-        if(stack_grow(fault_addr)) return;
-     } 
-  } 
-  else {
-    if (! load_file (e->file, e->ofs, (void *) e->vaddr,
-                     e->read_bytes, e->zero_bytes, e->writable)) { // We couldn't load code segment 
-        // Empty
-    } else {
-        // Loaded code segment successfully
-        return;
+  bool load = false;
+  if (not_present && fault_addr > USER_VADDR_BOTTOM &&
+      is_user_vaddr(fault_addr))
+    {
+      struct sup_page_entry *spte = get_spte(fault_addr);
+      if (spte)
+	{
+	  load = load_page(spte);
+	  spte->pinned = false;
+	}
+      else if (fault_addr >= f->esp - STACK_HEURISTIC)
+	{
+	  load = grow_stack(fault_addr);
+	}
     }
-  }
-  
-  /* Just for now output all the user page faults TODO
-  if(user) {
-    exit_process(thread_current()->name, -1);
-    return;
-  } 
-  */
-  standard_pf(fault_addr, not_present, write, user, f);
-}
-
-void standard_pf(void* fault_addr, bool not_present, bool write, bool user, struct intr_frame* f) {
-  printf ("Page fault at %p: %s error %s page in %s context.\n",
-          fault_addr,
-          not_present ? "not present" : "rights violation",
-          write ? "writing" : "reading",
-          user ? "user" : "kernel");
-  kill (f); 
+  if (!load)
+    {
+      printf ("Page fault at %p: %s error %s page in %s context.\n",
+	      fault_addr,
+	      not_present ? "not present" : "rights violation",
+	      write ? "writing" : "reading",
+	      user ? "user" : "kernel");
+      kill (f);
+    }
 }
 

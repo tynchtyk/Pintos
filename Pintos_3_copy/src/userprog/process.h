@@ -2,29 +2,26 @@
 #define USERPROG_PROCESS_H
 
 #include "threads/thread.h"
-#include <threads/synch.h>
-#include <filesys/file.h>
-
-struct pchild {
-    int exit_status;
-    tid_t child_tid; 
-    struct list_elem pchild_elem;
+struct process_file {
+  struct file *file;
+  int fd;
+  struct list_elem elem;
 };
 
-struct wchild {
-    tid_t child_tid; 
-    struct list_elem wchild_elem;
+struct mmap_file {
+  struct sup_page_entry *spte;
+  int mapid;
+  struct list_elem elem;
 };
 
-static struct lock filesys_lock;
-struct lock* get_filesys_lock(void);
-
+int process_add_file (struct file *f);
+struct file* process_get_file (int fd);
 tid_t process_execute (const char *file_name);
 int process_wait (tid_t);
 void process_exit (void);
 void process_activate (void);
-
-bool load_file (struct file *file, off_t ofs, uint8_t *upage,
-              uint32_t page_read_bytes, uint32_t page_zero_bytes, bool writable);
+bool install_page (void *upage, void *kpage, bool writable);
+bool process_add_mmap (struct sup_page_entry *spte);
+void process_remove_mmap (int mapping);
 
 #endif /* userprog/process.h */

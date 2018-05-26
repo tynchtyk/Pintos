@@ -1,19 +1,37 @@
 #ifndef USERPROG_SYSCALL_H
 #define USERPROG_SYSCALL_H
 
-#include <threads/thread.h>
-#include <filesys/file.h>
-#include <list.h>
+#include "threads/synch.h"
 
-void exit_process(char * name, int status);
+#define CLOSE_ALL -1
+#define ERROR -1
 
-struct fd_process {
-    int fd;
-    struct file * f;
-    struct list_elem fd_pr_elem;
+#define NOT_LOADED 0
+#define LOAD_SUCCESS 1
+#define LOAD_FAIL 2
+
+#define USER_VADDR_BOTTOM ((void *) 0x08048000)
+#define STACK_HEURISTIC 32
+
+struct lock filesys_lock;
+
+struct child_process {
+  int pid;
+  int load;
+  bool wait;
+  bool exit;
+  int status;
+  struct semaphore load_sema;
+  struct semaphore exit_sema;
+  struct list_elem elem;
 };
 
-void process_close_fds(int);
+struct child_process* add_child_process (int pid);
+struct child_process* get_child_process (int pid);
+void remove_child_process (struct child_process *cp);
+void remove_child_processes (void);
+
+void process_close_file (int fd);
 
 void syscall_init (void);
 

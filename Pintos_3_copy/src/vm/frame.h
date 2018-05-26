@@ -1,28 +1,23 @@
 #ifndef VM_FRAME_H
 #define VM_FRAME_H
 
-#include "threads/palloc.h"
-#include "threads/synch.h"
-#include "vm/page.h"
 #include <stdbool.h>
-#include <stdint.h>
-#include <list.h>
+#include "threads/synch.h"
 
-struct lock frame_table_lock;
+/* A physical frame. */
+struct frame 
+  {
+    struct lock lock;           /* Prevent simultaneous access. */
+    void *base;                 /* Kernel virtual base address. */
+    struct page *page;          /* Mapped process page, if any. */
+  };
 
-struct list frame_table;
+void frame_init (void);
 
-struct frame_entry {
-  void *frame;
-  struct sup_page_entry *spte;
-  struct thread *thread;
-  struct list_elem elem;
-};
+struct frame *frame_alloc_and_lock (struct page *);
+void frame_lock (struct page *);
 
-void frame_table_init (void);
-void* frame_alloc (enum palloc_flags flags, struct sup_page_entry *spte);
-void frame_free (void *frame);
-void frame_add_to_table (void *frame, struct sup_page_entry *spte);
-void* frame_evict (enum palloc_flags flags);
+void frame_free (struct frame *);
+void frame_unlock (struct frame *);
 
 #endif /* vm/frame.h */

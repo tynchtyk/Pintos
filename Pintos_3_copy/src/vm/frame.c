@@ -1,124 +1,162 @@
-#include "filesys/file.h"
+#include "vm/frame.h"
+#include <stdio.h>
+#include "vm/page.h"
+#include "devices/timer.h"
+#include "threads/init.h"
 #include "threads/malloc.h"
 #include "threads/palloc.h"
 #include "threads/synch.h"
-#include "threads/thread.h"
-#include "userprog/pagedir.h"
-#include "userprog/syscall.h"
-#include "vm/frame.h"
-#include "vm/page.h"
-#include "vm/swap.h"
+#include "threads/vaddr.h"
 
-void frame_table_init (void)
-{
-  list_init(&frame_table);
-  lock_init(&frame_table_lock);
-}
+static struct frame *frames;
+static size_t frame_cnt;
 
-void* frame_alloc (enum palloc_flags flags, struct sup_page_entry *spte)
-{
-  if ( (flags & PAL_USER) == 0 )
-    {
-      return NULL;
-    }
-  void *frame = palloc_get_page(flags);
-  if (frame)
-    {
-      frame_add_to_table(frame, spte);
-    }
-  else
-    {
-      while (!frame)
-	{
-	  frame = frame_evict(flags);
-	  lock_release(&frame_table_lock);
-	}
-      if (!frame)
-	{
-	  PANIC ("Frame could not be evicted because swap is full!");
-	}
-      frame_add_to_table(frame, spte);
-    }
-  return frame;
-}
+static struct lock scan_lock;
+static size_t hand;
 
-void frame_free (void *frame)
+/* Initialize the frame manager. */
+void
+frame_init (void) 
 {
-  struct list_elem *e;
+  void *base;
+
+  lock_init (&scan_lock);
   
-  lock_acquire(&frame_table_lock);
-  for (e = list_begin(&frame_table); e != list_end(&frame_table);
-       e = list_next(e))
+  frames = malloc (sizeof *frames * init_ram_pages);
+  if (frames == NULL)
+    PANIC ("out of memory allocating page frames");
+
+  while ((base = palloc_get_page (PAL_USER)) != NULL) 
     {
-      struct frame_entry *fte = list_entry(e, struct frame_entry, elem);
-      if (fte->frame == frame)
-	{
-	  list_remove(e);
-	  free(fte);
-	  palloc_free_page(frame);
-	  break;
-	}
+      struct frame *f = &frames[frame_cnt++];
+      lock_init (&f->lock);
+      f->base = base;
+      f->page = NULL;
     }
-  lock_release(&frame_table_lock);
 }
 
-void frame_add_to_table (void *frame, struct sup_page_entry *spte)
+/* Tries to allocate and lock a frame for PAGE.
+   Returns the frame if successful, false on failure. */
+static struct frame *
+try_frame_alloc_and_lock (struct page *page) 
 {
-  struct frame_entry *fte = malloc(sizeof(struct frame_entry));
-  fte->frame = frame;
-  fte->spte = spte;
-  fte->thread = thread_current();
-  lock_acquire(&frame_table_lock);
-  list_push_back(&frame_table, &fte->elem);
-  lock_release(&frame_table_lock);
+  size_t i;
+
+  lock_acquire (&scan_lock);
+
+  /* Find a free frame. */
+  for (i = 0; i < frame_cnt; i++)
+    {
+      struct frame *f = &frames[i];
+      if (!lock_try_acquire (&f->lock))
+        continue;
+      if (f->page == NULL) 
+        {
+          f->page = page;
+          lock_release (&scan_lock);
+          return f;
+        } 
+      lock_release (&f->lock);
+    }
+
+  /* No free frame.  Find a frame to evict. */
+  for (i = 0; i < frame_cnt * 2; i++) 
+    {
+      /* Get a frame. */
+      struct frame *f = &frames[hand];
+      if (++hand >= frame_cnt)
+        hand = 0;
+
+      if (!lock_try_acquire (&f->lock))
+        continue;
+
+      if (f->page == NULL) 
+        {
+          f->page = page;
+          lock_release (&scan_lock);
+          return f;
+        } 
+
+      if (page_accessed_recently (f->page)) 
+        {
+          lock_release (&f->lock);
+          continue;
+        }
+          
+      lock_release (&scan_lock);
+      
+      /* Evict this frame. */
+      if (!page_out (f->page))
+        {
+          lock_release (&f->lock);
+          return NULL;
+        }
+
+      f->page = page;
+      return f;
+    }
+
+  lock_release (&scan_lock);
+  return NULL;
 }
 
-void* frame_evict (enum palloc_flags flags)
+
+/* Tries really hard to allocate and lock a frame for PAGE.
+   Returns the frame if successful, false on failure. */
+struct frame *
+frame_alloc_and_lock (struct page *page) 
 {
-  lock_acquire(&frame_table_lock);
-  struct list_elem *e = list_begin(&frame_table);
-  
-  while (true)
+  size_t try;
+
+  for (try = 0; try < 3; try++) 
     {
-      struct frame_entry *fte = list_entry(e, struct frame_entry, elem);
-      if (!fte->spte->pinned)
-	{
-	  struct thread *t = fte->thread;
-	  if (pagedir_is_accessed(t->pagedir, fte->spte->uva))
-	    {
-	      pagedir_set_accessed(t->pagedir, fte->spte->uva, false);
-	    }
-	  else
-	    {
-	      if (pagedir_is_dirty(t->pagedir, fte->spte->uva) ||
-		  fte->spte->type == SWAP)
-		{
-		  if (fte->spte->type == MMAP)
-		    {
-		      lock_acquire(&filesys_lock);
-		      file_write_at(fte->spte->file, fte->frame,
-				    fte->spte->read_bytes,
-				    fte->spte->offset);
-		      lock_release(&filesys_lock);
-		    }
-		  else
-		    {
-		      fte->spte->type = SWAP;
-		      fte->spte->swap_index = swap_out(fte->frame);
-		    }
-		}
-	      fte->spte->is_loaded = false;
-	      list_remove(&fte->elem);
-	      pagedir_clear_page(t->pagedir, fte->spte->uva);
-	      palloc_free_page(fte->frame);
-	      free(fte);
-	      return palloc_get_page(flags);
-	    }
-	}
-      e = list_next(e);
-      if (e == list_end(&frame_table))
-	{
-	  e = list_begin(&frame_table);
-	}
+      struct frame *f = try_frame_alloc_and_lock (page);
+      if (f != NULL) 
+        {
+          ASSERT (lock_held_by_current_thread (&f->lock));
+          return f; 
+        }
+      timer_msleep (1000);
     }
+
+  return NULL;
+}
+
+/* Locks P's frame into memory, if it has one.
+   Upon return, p->frame will not change until P is unlocked. */
+void
+frame_lock (struct page *p) 
+{
+  /* A frame can be asynchronously removed, but never inserted. */
+  struct frame *f = p->frame;
+  if (f != NULL) 
+    {
+      lock_acquire (&f->lock);
+      if (f != p->frame)
+        {
+          lock_release (&f->lock);
+          ASSERT (p->frame == NULL); 
+        } 
+    }
+}
+
+/* Releases frame F for use by another page.
+   F must be locked for use by the current process.
+   Any data in F is lost. */
+void
+frame_free (struct frame *f)
+{
+  ASSERT (lock_held_by_current_thread (&f->lock));
+          
+  f->page = NULL;
+  lock_release (&f->lock);
+}
+
+/* Unlocks frame F, allowing it to be evicted.
+   F must be locked for use by the current process. */
+void
+frame_unlock (struct frame *f) 
+{
+  ASSERT (lock_held_by_current_thread (&f->lock));
+  lock_release (&f->lock);
 }
